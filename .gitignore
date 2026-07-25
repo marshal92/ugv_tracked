@@ -1,0 +1,24 @@
+# VS Code
+.vscode/
+*.code-workspace
+*.db
+*.vc.db
+
+# PlatformIO
+.pio/
+ugv_tracked_firmware/.pio/
+
+# ROS 2 / Python / C++
+build/
+install/
+log/
+__pycache__/
+*.pyc
+*.o
+*.so
+*.a
+
+# Swap files and OS generated files
+*.swp
+*~
+.DS_Store
