@@ -56,4 +56,9 @@
 #define MIN_ABS_LIN 0.2  
 #define MIN_ABS_ANG 0.6
 
+// --- BATTERY (INA226) ---
+// Настройки для 3S Li-ion (3 * 4.2V = 12.6V max, 3 * 3.0V = 9.0V min)
+#define BATT_MAX_V 12.6
+#define BATT_MIN_V 9.0
+
 #endif

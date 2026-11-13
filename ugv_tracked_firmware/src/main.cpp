@@ -6,9 +6,11 @@
 #include <geometry_msgs/msg/twist.h>
 #include <sensor_msgs/msg/imu.h> 
 #include <nav_msgs/msg/odometry.h>
+#include <sensor_msgs/msg/battery_state.h>
 #include <std_msgs/msg/bool.h>
 #include <rmw_microros/rmw_microros.h>
 #include <Wire.h>
+#include "INA226.h"
 
 #include "lino_base_config.h"
 #include "motor.h"
@@ -34,6 +36,7 @@ PID pid1(PWM_MIN, PWM_MAX, K_P, K_I, K_D);
 PID pid2(PWM_MIN, PWM_MAX, K_P, K_I, K_D);
 Kinematics kinematics(LINO_BASE, WHEEL_DIAMETER, LR_WHEELS_DISTANCE, MAX_RPM);
 IMU imu;
+INA226 ina(0x40);
 
 Ramp ramp_linear(LINEAR_ACCEL);
 Ramp ramp_angular(ANGULAR_ACCEL);
@@ -46,6 +49,8 @@ rcl_publisher_t imu_publisher;
 sensor_msgs__msg__Imu imu_msg;
 rcl_publisher_t odom_publisher;
 nav_msgs__msg__Odometry odom_msg;
+rcl_publisher_t battery_publisher;
+sensor_msgs__msg__BatteryState battery_msg;
 
 rclc_executor_t executor;
 rclc_support_t support;
@@ -76,12 +81,16 @@ void light_callback(const void * msgin) {
     digitalWrite(LIGHT_PIN, msg->data ? HIGH : LOW);
 }
 
+bool ina_connected = false;
+bool imu_connected = false;
+
 void setup() {
   Serial.begin(SERIAL_BAUD);
   set_microros_serial_transports(Serial);
   
   // --- ВАЖНО: Назначаем I2C пины для S3 ---
   Wire.begin(I2C_SDA, I2C_SCL);
+  ina_connected = ina.begin();
 
   pinMode(LED_PIN, OUTPUT);
   pinMode(LIGHT_PIN, OUTPUT);
@@ -105,7 +114,8 @@ void setup() {
   
   rmw_uros_sync_session(1000);
 
-  if (imu.init()) {
+  imu_connected = imu.init();
+  if (imu_connected) {
       for(int i=0; i<3; i++) { digitalWrite(LIGHT_PIN, HIGH); delay(50); digitalWrite(LIGHT_PIN, LOW); delay(50); }
   }
 
@@ -116,6 +126,7 @@ void setup() {
   //rclc_publisher_init_default(&odom_publisher, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(nav_msgs, msg, Odometry), "odom/unfiltered");
   rclc_publisher_init_best_effort(&imu_publisher, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu), "imu/data");
   rclc_publisher_init_best_effort(&odom_publisher, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(nav_msgs, msg, Odometry), "odom/unfiltered");
+  rclc_publisher_init_best_effort(&battery_publisher, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, BatteryState), "battery_state");
 
   odom_msg.header.frame_id.data = (char*)"odom";
   odom_msg.header.frame_id.size = strlen("odom");
@@ -159,6 +170,32 @@ void loop() {
   rclc_executor_spin_some(&executor, RCL_MS_TO_NS(0)); 
 
   unsigned long now = millis();
+  
+  static unsigned long last_battery_time = 0;
+  if (now - last_battery_time >= 1000) {
+      last_battery_time = now;
+      float raw_voltage = ina_connected ? ina.getBusVoltage() : 12.0;
+      
+      static float filtered_voltage = 0.0;
+      if (filtered_voltage == 0.0) {
+          filtered_voltage = raw_voltage; // Инициализация при первом запуске
+      } else {
+          // Мягкий фильтр EMA (10% новых данных, 90% старых) для сглаживания просадок
+          filtered_voltage = (filtered_voltage * 0.9) + (raw_voltage * 0.1);
+      }
+      
+      float percentage = (filtered_voltage - BATT_MIN_V) / (BATT_MAX_V - BATT_MIN_V);
+      if (percentage > 1.0) percentage = 1.0;
+      if (percentage < 0.0) percentage = 0.0;
+
+      battery_msg.voltage = filtered_voltage;
+      battery_msg.percentage = percentage;
+      battery_msg.power_supply_health = sensor_msgs__msg__BatteryState__POWER_SUPPLY_HEALTH_GOOD;
+      battery_msg.power_supply_technology = sensor_msgs__msg__BatteryState__POWER_SUPPLY_TECHNOLOGY_LION;
+      battery_msg.present = true;
+      
+      (void)rcl_publish(&battery_publisher, &battery_msg, NULL);
+  }
   
   if ((now - last_cmd_received_time) > WATCHDOG_TIMEOUT) {
       target_linear_x_raw = 0.0; target_angular_z_raw = 0.0;
@@ -241,12 +278,19 @@ void loop() {
       //odom_msg.twist.twist.linear.y = rpm1; 
       //odom_msg.twist.twist.linear.z = rpm2; 
       // ---------------------------
-      imu.update(); // <-- Обязательно дергаем эту функцию для вычитывания буфера BNO085
+      if (imu_connected) {
+          imu.update(); // <-- Обязательно дергаем эту функцию для вычитывания буфера BNO085
+      }
 
       imu_msg.header.stamp = odom_msg.header.stamp;
-      imu_msg.linear_acceleration = imu.readAccelerometer();
-      imu_msg.angular_velocity = imu.readGyroscope();
-      imu_msg.orientation = imu.readOrientation();
+      if (imu_connected) {
+          imu_msg.linear_acceleration = imu.readAccelerometer();
+          imu_msg.angular_velocity = imu.readGyroscope();
+          imu_msg.orientation = imu.readOrientation();
+      } else {
+          // Если IMU нет, отправляем нули чтобы ROS не ругался
+          imu_msg.orientation.w = 1.0; 
+      }
 
       (void)rcl_publish(&imu_publisher, &imu_msg, NULL);
       (void)rcl_publish(&odom_publisher, &odom_msg, NULL);
