@@ -5,13 +5,14 @@
     
     <link name="base_link">
       <visual>
-        <origin xyz="0 0 -0.08" rpy="0 0 0"/>
+        <!-- Align metric SolidWorks Y-up base.STL (-Z_stl->+X forward, -X_stl->+Y left, +Y_stl->+Z up) -->
+        <origin xyz="0.2953 0.1689 -0.2479" rpy="1.5708 0 -1.5708"/>
         <geometry>
           <xacro:if value="${mesh_file == ''}">
             <box size="${length} ${width} ${height}"/>
           </xacro:if>
           <xacro:unless value="${mesh_file == ''}">
-            <mesh filename="${mesh_file}" scale="0.001 0.001 0.001"/>
+            <mesh filename="${mesh_file}" scale="1 1 1"/>
           </xacro:unless>
         </geometry>
         <material name="grey">
